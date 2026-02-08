@@ -15,11 +15,24 @@ app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, '.')));
 
 // Database Connection
+if (!process.env.DATABASE_URL) {
+    console.error("FATAL ERROR: process.env.DATABASE_URL is not defined.");
+    console.error("Please configure the DATABASE_URL environment variable in your Render dashboard.");
+}
+
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
         rejectUnauthorized: false
     }
+});
+
+pool.on('connect', () => {
+    console.log('Connected to the PostgreSQL database.');
+});
+
+pool.on('error', (err) => {
+    console.error('Unexpected error on idle client', err);
 });
 
 // Original Data for Seeding
@@ -115,7 +128,9 @@ initDatabase();
 // GET /api/books
 app.get('/api/books', async (req, res) => {
     try {
+        console.log('GET /api/books called');
         const result = await pool.query('SELECT * FROM books ORDER BY id ASC');
+        console.log(`Fetched ${result.rows.length} books`);
         res.json(result.rows);
     } catch (err) {
         console.error(err);

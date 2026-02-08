@@ -411,21 +411,27 @@ const App = () => {
   const [overdueList, setOverdueList] = useState([]);
   const [editingBook, setEditingBook] = useState(null); // Book to edit (or 'NEW' for adding)
 
+  const [error, setError] = useState(null);
+
   // Load Data
   const fetchData = async () => {
     try {
       setLoading(true);
+      setError(null);
 
-      // Fetch books and rentals in parallel
-      const [booksRes, rentalsRes] = await Promise.all([
-        fetch('/api/books'),
-        fetch('/api/rentals')
-      ]);
+      console.log("Fetching /api/books...");
+      const booksRes = await fetch('/api/books');
 
-      if (!booksRes.ok || !rentalsRes.ok) throw new Error('Failed to fetch data');
+      console.log("Fetching /api/rentals...");
+      const rentalsRes = await fetch('/api/rentals');
+
+      if (!booksRes.ok) throw new Error(`Failed to fetch books: ${booksRes.status} ${booksRes.statusText}`);
+      if (!rentalsRes.ok) throw new Error(`Failed to fetch rentals: ${rentalsRes.status} ${rentalsRes.statusText}`);
 
       const booksData = await booksRes.json();
       const rentalsData = await rentalsRes.json();
+
+      console.log(`Loaded ${booksData.length} books and ${rentalsData.length} rentals.`);
 
       // Merge rentals into books
       const mergedBooks = booksData.map(book => {
@@ -439,7 +445,7 @@ const App = () => {
       setBooks(mergedBooks);
     } catch (err) {
       console.error("Error fetching data:", err);
-      // Fallback or error state?
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -613,6 +619,7 @@ const App = () => {
       </header>
 
       {loading && <div style={{ textAlign: 'center', padding: '20px' }}>Loading...</div>}
+      {error && <div style={{ textAlign: 'center', padding: '20px', color: 'red', border: '1px solid red', margin: '20px' }}>Error: {error}</div>}
 
       <div className="book-grid">
         {books.map(book => (
