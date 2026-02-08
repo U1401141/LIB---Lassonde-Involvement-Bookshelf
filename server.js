@@ -12,13 +12,31 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, '.')));
 
-// Database Connection
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false
+// --- Database Connection Strategy ---
+let pool = null;
+let dbAvailable = false;
+
+if (process.env.DATABASE_URL) {
+    pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: {
+            rejectUnauthorized: false
+        }
+    });
+    dbAvailable = true;
+    console.log("Database configuration found. Attempting to connect...");
+} else {
+    console.warn("WARNING: No DATABASE_URL found. Running in MEMORY-ONLY mode.");
+    console.warn("Rentals and new books will NOT be saved persistently.");
+}
+
+// Helper to safely execute queries
+const safeQuery = async (text, params) => {
+    if (!dbAvailable || !pool) {
+        throw new Error("Database not available");
     }
-});
+    return await pool.query(text, params);
+};
 
 // Original Data (The 23 Books)
 const INITIAL_BOOKS = [
@@ -49,9 +67,11 @@ const INITIAL_BOOKS = [
 
 // --- Database Initialization ---
 const initDatabase = async () => {
+    if (!dbAvailable) return;
+
     try {
-        // Create Rentals Table (No FK to allow virtual books)
-        await pool.query(`CREATE TABLE IF NOT EXISTS rentals (
+        // Create Rentals Table
+        await safeQuery(`CREATE TABLE IF NOT EXISTS rentals (
             rental_id SERIAL PRIMARY KEY,
             book_id INTEGER NOT NULL,
             book_title TEXT NOT NULL,
@@ -62,8 +82,8 @@ const initDatabase = async () => {
             return_date TEXT
         )`);
 
-        // Create Books Table (For extra books added by Admin)
-        await pool.query(`CREATE TABLE IF NOT EXISTS books (
+        // Create Books Table
+        await safeQuery(`CREATE TABLE IF NOT EXISTS books (
             id SERIAL PRIMARY KEY,
             title TEXT NOT NULL,
             author TEXT NOT NULL,
@@ -72,63 +92,55 @@ const initDatabase = async () => {
             shared_by TEXT
         )`);
 
-        // Ensure ID sequence starts after 23 so new books don't clash with INITIAL_BOOKS
-        // We use setval to 23, so nextval will be 24
-        await pool.query("SELECT setval(pg_get_serial_sequence('books', 'id'), 23, true)");
+        // Ensure ID sequence starts after 23
+        await safeQuery("SELECT setval(pg_get_serial_sequence('books', 'id'), 23, true)");
 
-        console.log('Tables initialized. Hybrid Data Mode Active.');
+        console.log('Tables initialized. Database Active.');
     } catch (err) {
-        // If table doesn't exist yet, this might fail, but CREATE TABLE handles existence.
-        // If sequence issue (e.g. empty table), ignore.
-        console.log('Database init check complete.');
+        console.error('Database connection failed on init:', err.message);
+        // We do NOT set dbAvailable = false here, because it might be a transient connection issue.
+        // But the queries below will fail safely.
     }
 };
 
 // Start Database Init
 initDatabase();
 
-// --- Manual Seeding Endpoint (DEPRECATED but kept for potential debug) ---
-app.get('/seed-books', async (req, res) => {
-    res.json({ message: "Seeding is disabled in Hybrid Mode. The 23 books are always visible." });
-});
-
 // --- API Endpoints ---
 
 // 1. GET ALL BOOKS (Hybrid: Static 23 + DB Books)
 app.get('/api/books', async (req, res) => {
+    // 1. Static Books (IDs 1-23)
+    const staticBooks = INITIAL_BOOKS.map((book, index) => ({
+        id: index + 1,
+        ...book
+    }));
+
     try {
-        // 1. Static Books (IDs 1-23)
-        const staticBooks = INITIAL_BOOKS.map((book, index) => ({
-            id: index + 1,
-            ...book
-        }));
+        if (dbAvailable) {
+            // 2. Fetch DB Books (Only IDs > 23)
+            const result = await safeQuery('SELECT * FROM books WHERE id > 23 ORDER BY id ASC');
+            const dbBooks = result.rows;
 
-        // 2. Fetch DB Books (Only IDs > 23 to allow 'add on top')
-        // We select ALL from DB, but usually we expect only new books here.
-        // If old data exists with ID < 23, we filter it out to prioritize the static source of truth.
-        const result = await pool.query('SELECT * FROM books WHERE id > 23 ORDER BY id ASC');
-        const dbBooks = result.rows;
-
-        // 3. Merge
-        const allBooks = [...staticBooks, ...dbBooks];
-
-        res.json(allBooks);
+            // 3. Merge
+            res.json([...staticBooks, ...dbBooks]);
+        } else {
+            console.log('DB unavailable. Returning static books only.');
+            res.json(staticBooks);
+        }
     } catch (err) {
-        console.error(err);
-        // Fallback: Just return static books if DB fails
-        const fallbackBooks = INITIAL_BOOKS.map((book, index) => ({
-            id: index + 1,
-            ...book
-        }));
-        res.json(fallbackBooks);
+        console.error('Error fetching books from DB (Fallback active):', err.message);
+        res.json(staticBooks);
     }
 });
 
 // 2. ADD A BOOK (For Admin)
 app.post('/api/books', async (req, res) => {
+    if (!dbAvailable) return res.status(503).json({ error: "Database unavailable. Cannot add books." });
+
     const { title, author, stock, cover, shared_by } = req.body;
     try {
-        const result = await pool.query(
+        const result = await safeQuery(
             'INSERT INTO books (title, author, stock, cover, shared_by) VALUES ($1, $2, $3, $4, $5) RETURNING *',
             [title, author, stock, cover, shared_by]
         );
@@ -149,8 +161,10 @@ app.put('/api/books/:id', async (req, res) => {
         return res.status(403).json({ error: "Cannot edit the original 23 books." });
     }
 
+    if (!dbAvailable) return res.status(503).json({ error: "Database unavailable. Cannot edit books." });
+
     try {
-        const result = await pool.query(
+        const result = await safeQuery(
             'UPDATE books SET title=$1, author=$2, stock=$3, cover=$4, shared_by=$5 WHERE id=$6 RETURNING *',
             [title, author, stock, cover, shared_by, id]
         );
@@ -163,20 +177,24 @@ app.put('/api/books/:id', async (req, res) => {
 
 // 4. GET ALL RENTALS
 app.get('/api/rentals', async (req, res) => {
+    if (!dbAvailable) return res.json([]); // Return empty list transparently
+
     try {
-        const result = await pool.query('SELECT * FROM rentals');
+        const result = await safeQuery('SELECT * FROM rentals');
         res.json(result.rows);
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
+        console.error("Error fetching rentals (returning empty list):", err.message);
+        res.json([]);
     }
 });
 
 // 5. CREATE RENTAL
 app.post('/api/rentals', async (req, res) => {
+    if (!dbAvailable) return res.status(503).json({ error: "Database unavailable. Cannot rent." });
+
     const { bookId, bookTitle, borrowerName, borrowerUid, rentDate, dueDate } = req.body;
     try {
-        const result = await pool.query(
+        const result = await safeQuery(
             'INSERT INTO rentals (book_id, book_title, borrower_name, borrower_uid, rent_date, due_date) VALUES ($1, $2, $3, $4, $5, $6) RETURNING rental_id',
             [bookId, bookTitle, borrowerName, borrowerUid, rentDate, dueDate]
         );
@@ -189,10 +207,12 @@ app.post('/api/rentals', async (req, res) => {
 
 // 6. RETURN BOOK
 app.put('/api/rentals/:id/return', async (req, res) => {
+    if (!dbAvailable) return res.status(503).json({ error: "Database unavailable. Cannot return." });
+
     const rentalId = req.params.id;
     const return_date = new Date().toISOString().split('T')[0];
     try {
-        const result = await pool.query(
+        const result = await safeQuery(
             'UPDATE rentals SET return_date = $1 WHERE rental_id = $2',
             [return_date, rentalId]
         );
@@ -204,7 +224,42 @@ app.put('/api/rentals/:id/return', async (req, res) => {
     }
 });
 
+// 6a. DELETE RENTAL
+app.delete('/api/rentals/:id', async (req, res) => {
+    if (!dbAvailable) return res.status(503).json({ error: "Database unavailable." });
+
+    const rentalId = req.params.id;
+    try {
+        const result = await safeQuery('DELETE FROM rentals WHERE rental_id = $1', [rentalId]);
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Rental not found' });
+        res.json({ message: 'Rental record deleted' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Database error' });
+    }
+});
+
+// 7. GET OVERDUE
+app.get('/api/rentals/overdue', async (req, res) => {
+    if (!dbAvailable) return res.json([]);
+
+    const today = new Date().toISOString().split('T')[0];
+    try {
+        const result = await safeQuery(
+            'SELECT * FROM rentals WHERE return_date IS NULL AND due_date < $1',
+            [today]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.json([]);
+    }
+});
+
 // Start Server
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
+    if (!dbAvailable) {
+        console.log("NOTE: Database is NOT configured. App running in static mode.");
+    }
 });
