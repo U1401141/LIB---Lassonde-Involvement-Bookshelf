@@ -47,32 +47,10 @@ const INITIAL_BOOKS = [
     { title: 'Educated', author: 'Tara Westover', stock: 1, cover: 'Image/Educated%20%E2%80%94%20Tara%20Westover.jpg' }
 ];
 
-// --- Database Initialization & Seeding ---
-const seedDatabase = async () => {
-    try {
-        const res = await pool.query('SELECT COUNT(*) FROM books');
-        const count = parseInt(res.rows[0].count, 10);
-
-        if (count === 0) {
-            console.log('Seeding database with initial books...');
-            for (const book of INITIAL_BOOKS) {
-                await pool.query(
-                    'INSERT INTO books (title, author, stock, cover) VALUES ($1, $2, $3, $4)',
-                    [book.title, book.author, book.stock, book.cover]
-                );
-            }
-            console.log('Seeding complete.');
-        } else {
-            console.log('Books already exist. Skipping seed.');
-        }
-    } catch (err) {
-        console.error('Error seeding database:', err);
-    }
-};
-
+// --- Database Initialization ---
 const initDatabase = async () => {
     try {
-        // Create Rentals Table
+        // Create Rentals Table (No FK to allow virtual books)
         await pool.query(`CREATE TABLE IF NOT EXISTS rentals (
             rental_id SERIAL PRIMARY KEY,
             book_id INTEGER NOT NULL,
@@ -84,7 +62,7 @@ const initDatabase = async () => {
             return_date TEXT
         )`);
 
-        // Create Books Table
+        // Create Books Table (For extra books added by Admin)
         await pool.query(`CREATE TABLE IF NOT EXISTS books (
             id SERIAL PRIMARY KEY,
             title TEXT NOT NULL,
@@ -94,29 +72,55 @@ const initDatabase = async () => {
             shared_by TEXT
         )`);
 
-        console.log('Tables initialized.');
+        // Ensure ID sequence starts after 23 so new books don't clash with INITIAL_BOOKS
+        // We use setval to 23, so nextval will be 24
+        await pool.query("SELECT setval(pg_get_serial_sequence('books', 'id'), 23, true)");
 
-        // CALL THE SEED FUNCTION HERE!
-        await seedDatabase();
-
+        console.log('Tables initialized. Hybrid Data Mode Active.');
     } catch (err) {
-        console.error('Error initializing database:', err);
+        // If table doesn't exist yet, this might fail, but CREATE TABLE handles existence.
+        // If sequence issue (e.g. empty table), ignore.
+        console.log('Database init check complete.');
     }
 };
 
 // Start Database Init
 initDatabase();
 
+// --- Manual Seeding Endpoint (DEPRECATED but kept for potential debug) ---
+app.get('/seed-books', async (req, res) => {
+    res.json({ message: "Seeding is disabled in Hybrid Mode. The 23 books are always visible." });
+});
+
 // --- API Endpoints ---
 
-// 1. GET ALL BOOKS (This was missing!)
+// 1. GET ALL BOOKS (Hybrid: Static 23 + DB Books)
 app.get('/api/books', async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM books ORDER BY id ASC');
-        res.json(result.rows);
+        // 1. Static Books (IDs 1-23)
+        const staticBooks = INITIAL_BOOKS.map((book, index) => ({
+            id: index + 1,
+            ...book
+        }));
+
+        // 2. Fetch DB Books (Only IDs > 23 to allow 'add on top')
+        // We select ALL from DB, but usually we expect only new books here.
+        // If old data exists with ID < 23, we filter it out to prioritize the static source of truth.
+        const result = await pool.query('SELECT * FROM books WHERE id > 23 ORDER BY id ASC');
+        const dbBooks = result.rows;
+
+        // 3. Merge
+        const allBooks = [...staticBooks, ...dbBooks];
+
+        res.json(allBooks);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Database error fetching books' });
+        // Fallback: Just return static books if DB fails
+        const fallbackBooks = INITIAL_BOOKS.map((book, index) => ({
+            id: index + 1,
+            ...book
+        }));
+        res.json(fallbackBooks);
     }
 });
 
@@ -139,6 +143,12 @@ app.post('/api/books', async (req, res) => {
 app.put('/api/books/:id', async (req, res) => {
     const { id } = req.params;
     const { title, author, stock, cover, shared_by } = req.body;
+
+    // PROTECTION: Prevent editing original 23 books
+    if (parseInt(id, 10) <= 23) {
+        return res.status(403).json({ error: "Cannot edit the original 23 books." });
+    }
+
     try {
         const result = await pool.query(
             'UPDATE books SET title=$1, author=$2, stock=$3, cover=$4, shared_by=$5 WHERE id=$6 RETURNING *',
