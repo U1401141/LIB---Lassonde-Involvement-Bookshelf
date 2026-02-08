@@ -50,7 +50,7 @@ const INITIAL_BOOKS = [
 ];
 
 // Initialize Database
-const initDatabase = async () => {
+const createTables = async () => {
     try {
         await pool.query(`
             CREATE TABLE IF NOT EXISTS books (
@@ -75,24 +75,37 @@ const initDatabase = async () => {
                 return_date DATE
             );
         `);
+        console.log('Tables created successfully.');
+    } catch (err) {
+        console.error('Error creating tables:', err);
+    }
+};
 
-        // Check availability and seed if empty
+const seedDatabase = async () => {
+    try {
         const res = await pool.query('SELECT COUNT(*) FROM books');
-        if (parseInt(res.rows[0].count) === 0) {
-            console.log('Seeding initial books...');
+        const count = parseInt(res.rows[0].count);
+
+        if (count === 0) {
+            console.log('Table is empty. Seeding initial books...');
             for (const book of INITIAL_BOOKS) {
                 await pool.query(
                     'INSERT INTO books (title, author, stock, cover) VALUES ($1, $2, $3, $4)',
                     [book.title, book.author, book.stock, book.cover]
                 );
             }
-            console.log('Seeding complete.');
+            console.log('Database seeded with 23 initial books');
+        } else {
+            console.log('Books already exist. Skipping seed.');
         }
-
-        console.log('Database initialized successfully.');
     } catch (err) {
-        console.error('Error initializing database:', err);
+        console.error('Error seeding database:', err);
     }
+};
+
+const initDatabase = async () => {
+    await createTables();
+    await seedDatabase();
 };
 
 initDatabase();
