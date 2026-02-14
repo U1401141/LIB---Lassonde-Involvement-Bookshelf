@@ -2,7 +2,7 @@
     "name": "lib-app-backend",
     "version": "1.0.0",
     "description": "Backend for LIB book lending app (Cloudflare Workers + Hono + D1)",
-    "main": "src/index.js",
+    "main": "index.js",
     "scripts": {
         "deploy": "wrangler deploy",
         "dev": "wrangler dev",
