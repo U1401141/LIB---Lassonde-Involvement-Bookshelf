@@ -577,7 +577,6 @@ const App = () => {
     return (
       <div className="landing-screen">
         <img src="Image/LIB_Logo.png" alt="LIB Logo" className="logo-image logo-image-large" />
-        <h1 className="app-title">Lassonde Involvement Bookshelf</h1>
 
         <div className="role-selection">
           <div className="role-card" onClick={() => setView('USER')}>
@@ -595,7 +594,6 @@ const App = () => {
     return (
       <div className="landing-screen">
         <img src="Image/LIB_Logo.png" alt="LIB Logo" className="logo-image logo-image-large" />
-        <h2 className="app-title">Admin Access</h2>
         <AdminLogin onLogin={handleAdminLogin} onBack={() => setView('LANDING')} />
       </div>
     );
