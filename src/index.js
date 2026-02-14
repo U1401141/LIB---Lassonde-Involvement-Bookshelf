@@ -37,17 +37,13 @@ app.put('/api/books/:id', async (c) => {
     const id = c.req.param('id');
     const { title, author, stock, cover, shared_by } = await c.req.json();
 
-    // Protect original 23 books logic (optional but good to keep consistent)
-    if (parseInt(id) <= 23) {
-        // We technically allow stock updates, but maybe we want to restrict full edits?
-        // Retaining original logic: "Prevent editing original 23 books" (server.js line 160)
-        return c.json({ error: "Cannot edit the original 23 books." }, 403);
-    }
-
     try {
         const result = await c.env.DB.prepare(
             'UPDATE books SET title=?, author=?, stock=?, cover=?, shared_by=? WHERE id=? RETURNING *'
         ).bind(title, author, stock, cover, shared_by, id).first();
+
+        if (!result) return c.json({ error: 'Book not found' }, 404);
+
         return c.json(result);
     } catch (err) {
         return c.json({ error: err.message }, 500);
@@ -57,7 +53,7 @@ app.put('/api/books/:id', async (c) => {
 // 4. GET ALL RENTALS
 app.get('/api/rentals', async (c) => {
     try {
-        const result = await c.env.DB.prepare('SELECT * FROM rentals').all();
+        const result = await c.env.DB.prepare('SELECT * FROM rentals ORDER BY rent_date DESC').all();
         return c.json(result.results);
     } catch (err) {
         return c.json([], 500);
@@ -68,11 +64,12 @@ app.get('/api/rentals', async (c) => {
 app.post('/api/rentals', async (c) => {
     const { bookId, bookTitle, borrowerName, borrowerUid, rentDate, dueDate } = await c.req.json();
     try {
+        // Create rental record
         const result = await c.env.DB.prepare(
             'INSERT INTO rentals (book_id, book_title, borrower_name, borrower_uid, rent_date, due_date) VALUES (?, ?, ?, ?, ?, ?) RETURNING rental_id'
         ).bind(bookId, bookTitle, borrowerName, borrowerUid, rentDate, dueDate).first();
 
-        // Update Stock (Decrement)
+        // Decrement Stock
         await c.env.DB.prepare('UPDATE books SET stock = stock - 1 WHERE id = ?').bind(bookId).run();
 
         return c.json({ message: 'Rental created', rentalId: result.rental_id }, 201);
@@ -115,7 +112,23 @@ app.get('/api/rentals/overdue', async (c) => {
         ).bind(today).all();
         return c.json(result.results);
     } catch (err) {
-        return c.json([]);
+        return c.json([], 500);
+    }
+});
+
+// 8. DELETE RENTAL (Admin)
+app.delete('/api/rentals/:id', async (c) => {
+    const id = c.req.param('id');
+    try {
+        const result = await c.env.DB.prepare('DELETE FROM rentals WHERE rental_id = ?').bind(id).run();
+
+        if (result.success) {
+            return c.json({ message: 'Rental deleted successfully' });
+        } else {
+            return c.json({ error: 'Failed to delete rental' }, 500);
+        }
+    } catch (err) {
+        return c.json({ error: err.message }, 500);
     }
 });
 

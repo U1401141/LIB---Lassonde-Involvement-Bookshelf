@@ -2,6 +2,7 @@ const { useState, useEffect } = React;
 
 /* --- Constants & Utils --- */
 const MAX_RENTAL_DAYS = 14;
+const API_BASE_URL = 'https://libapp.kento-kimquin-921.workers.dev';
 
 const getDaysRented = (dateStringOrTimestamp) => {
   if (!dateStringOrTimestamp) return 0;
@@ -427,14 +428,12 @@ const App = () => {
       setLoading(true);
       setError(null);
 
-      // In a real Worker environment, these are relative paths
-      const booksRes = await fetch('/api/books');
+      // Fetch from deployed worker
+      const booksRes = await fetch(`${API_BASE_URL}/api/books`);
+      const rentalsRes = await fetch(`${API_BASE_URL}/api/rentals`);
 
-      // We also need rentals to merge availability
-      const rentalsRes = await fetch('/api/rentals');
-
-      if (!booksRes.ok) throw new Error(`Failed to fetch books`);
-      // rentals fetch might fail if rentals table empty or not set up? No, should return empty array.
+      if (!booksRes.ok) throw new Error(`Failed to fetch books: ${booksRes.status} ${booksRes.statusText}`);
+      if (!rentalsRes.ok) throw new Error(`Failed to fetch rentals: ${rentalsRes.status} ${rentalsRes.statusText}`);
 
       const booksData = await booksRes.json();
       const rentalsData = await rentalsRes.json();
@@ -451,8 +450,7 @@ const App = () => {
       setBooks(mergedBooks);
     } catch (err) {
       console.error("Error fetching data:", err);
-      // Fallback for demo if backend isn't running
-      setError("Waiting for backend...");
+      setError(`Waiting for backend connection... ensure CORS is enabled on ${API_BASE_URL}`);
     } finally {
       setLoading(false);
     }
@@ -469,7 +467,7 @@ const App = () => {
     if (!rentingBook) return;
 
     try {
-      const response = await fetch('/api/rentals', {
+      const response = await fetch(`${API_BASE_URL}/api/rentals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -499,7 +497,7 @@ const App = () => {
     const { rental } = returningData;
 
     try {
-      const response = await fetch(`/api/rentals/${rental.rental_id}/return`, {
+      const response = await fetch(`${API_BASE_URL}/api/rentals/${rental.rental_id}/return`, {
         method: 'PUT'
       });
 
@@ -517,8 +515,6 @@ const App = () => {
 
   const handleDeleteRental = async (rentalId) => {
     // Implement delete if API supports it, otherwise just return
-    // Note: The proposed backend doesn't have an explicit DELETE rental endpoint separate from Return
-    // but the old app did. I'll stick to Return for now unless I add DELETE to index.js
     console.log("Delete not fully implemented in this version, using Return flow preferred.");
   };
 
@@ -526,13 +522,13 @@ const App = () => {
     try {
       let response;
       if (editingBook === 'NEW') {
-        response = await fetch('/api/books', {
+        response = await fetch(`${API_BASE_URL}/api/books`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(bookData)
         });
       } else {
-        response = await fetch(`/api/books/${editingBook.id}`, {
+        response = await fetch(`${API_BASE_URL}/api/books/${editingBook.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(bookData)
@@ -554,13 +550,10 @@ const App = () => {
   // Check overdue for Admin
   const checkOverdue = async () => {
     try {
-      const response = await fetch('/api/rentals/overdue');
+      const response = await fetch(`${API_BASE_URL}/api/rentals/overdue`);
       const overdueRentals = await response.json();
 
       if (overdueRentals.length > 0) {
-        // Map overdue rentals to include book info for display
-        // The API returns the rental object. We need to match with books to get title if not in rental object
-        // The D1 schema saves book_title in rentals table, so we are good.
         const formatted = overdueRentals.map(r => ({
           rental: r,
           book: { title: r.book_title }
