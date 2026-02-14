@@ -5,4 +5,4 @@ compatibility_date = "2024-02-14"
 [[d1_databases]]
 binding = "DB"
 database_name = "lib-db"
-database_id = "xxxx-xxxx-xxxx-xxxx" # User will need to replace this with their actual DB ID
+database_id = "beb50184-cccb-4081-9f7f-e8a235f89ab8"
